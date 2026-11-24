@@ -61,55 +61,56 @@ def post(x, y, rad, tag, tip_rad=None, tip_len=1.2):
 for fx in (0, 0.38, -0.38, 0.67, -0.67):
     post(fx * XO, 0, 1.0 if fx == 0 else 0.7, '바닥 기둥')
 
-# 2) 옆 기둥 4개 (밴드 양옆, y±0.9) + 가장자리 접점
+# 2) 옆 기둥: 양쪽 가운데(y=0) 1개씩 Ø1.4
+#    + 아래 밴드 옆면 접점: 1.0mm 간격으로 일정하게, 밴드 양 가장자리(y±0.8)로 수평
+#    + 파베 발: 아래 N_STONES칸 알을 잡는 발 전부(건너뛰기 없음), 모든 파이프 같은 각도
+N_STONES = 3          # 아래에서 몇 칸 알까지 받칠지
+STEP = 1.0            # 옆면 접점 간격
+DZ = 0.9              # 파베 접점: 발 아랫면보다 0.9 아래 기둥에서 출발 (모두 동일 각도)
 col_top = -0.87
-for sx in (1, -1):
-    xc = sx * (XO + 0.95)
-    for y in (-0.9, 0.9):
-        b, tm = pipe([xc, y, PT - 0.3], [xc, y, col_top], 0.7, flat_start=True); add(b, tm, '옆 기둥')
-        feet.append((xc, y, 0.7))
-        for dz in (0.7, 2.7, 4.7, 6.7):
-            o = np.array([xc, y, col_top - dz]); h = hit(o, np.array([-sx, 0, 0]), 2.5)
-            if h is not None:
-                b, tm = pipe(o, h + np.array([-sx * EMB, 0, 0]), 0.175); add(b, tm, '옆 접점')
-        # 맨 위: 적도 근처로 비스듬히 (사용자 가이드 커브 방향)
-        tgt = np.array([sx * (XO - 0.7), y * 0.5, 0.31]); o = np.array([xc, y, col_top])
-        d = (tgt - o) / np.linalg.norm(tgt - o); h = hit(o, d, 3.5)
-        if h is not None:
-            b, tm = pipe(o, h + d * EMB, 0.175); add(b, tm, '옆 윗접점')
-
-# 2-b) 옆 파베 자리: 맨 아래 발(톱니) 3개 아랫면 받침 (양쪽, 알 줄 y=0 피해서 y±0.45)
-N_PAVE = 3
 vv = model.vertices
 for sx in (1, -1):
     xc = sx * (XO + 0.95)
-    band = vv[(vv[:, 2] > 0.05) & (vv[:, 2] < 9) & (np.abs(vv[:, 1]) < 0.7) & (sx * vv[:, 0] > 0)]
-    if not len(band): continue
-    xmax = np.max(sx * band[:, 0])
-    teeth = band[sx * band[:, 0] > xmax - 0.2]
-    zs = np.sort(teeth[:, 2]); groups = [[zs[0]]]
-    for z in zs[1:]:
-        if z - groups[-1][-1] > 0.25: groups.append([z])
-        else: groups[-1].append(z)
-    groups = [g for g in groups if len(g) > 3][:N_PAVE]
-    print("  파베 발 아랫면 z:", [round(min(g), 2) for g in groups])
+    # 2-a 아래 밴드 옆면 (일정 간격)
+    z = col_top
+    while z > lo[2] + 1.0:
+        for y in (-0.8, 0.8):
+            o = np.array([xc, 0.0, z]); d = np.array([-sx * 1.0, y / 1.8, 0]); d /= np.linalg.norm(d)
+            h = hit(o, d, 2.6)
+            if h is not None:
+                b, tm = pipe(o, h + d * EMB, 0.175); add(b, tm, '옆 접점')
+        z -= STEP
+    # 2-b 파베 발 찾기 (연결 덩어리 = 발 1개)
+    mm = model.copy(); mm.merge_vertices()
+    V, F = mm.vertices, mm.faces
+    sel = np.all(sx * V[F][:, :, 0] > XO - 0.83, axis=1) & np.all(V[F][:, :, 2] > 0.0, axis=1) & np.all(V[F][:, :, 2] < 8, axis=1)
+    teeth = []
+    if sel.any():
+        sub = mm.submesh([np.where(sel)[0]], append=True)
+        for c in sub.split(only_watertight=False):
+            a_, b_ = c.bounds
+            if len(c.faces) >= 4: teeth.append((a_[2], (a_[1] + b_[1]) / 2, max(abs(a_[0]), abs(b_[0]))))
+    rows = sorted(set(round(t[0], 2) for t in teeth))
+    # 알 칸 = 발 줄 사이 간격이 큰 곳(>0.7). 아래 N_STONES칸을 잡는 줄까지 전부
+    keep, gaps = [], 0
+    for i, zr in enumerate(rows):
+        keep.append(zr)
+        if i + 1 < len(rows) and rows[i + 1] - zr > 0.7:
+            gaps += 1
+            if gaps > N_STONES: keep.pop(); break
+    # 마지막 칸 윗쪽 발 줄까지 포함
+    if gaps <= N_STONES and len(keep) < len(rows): keep.append(rows[len(keep)])
+    print('  파베 발 줄(z):', keep, '개수', sum(1 for t in teeth if round(t[0], 2) in keep))
     top_needed = col_top
-    for g in groups:
-        zb = min(g)
-        tsel = teeth[np.abs(teeth[:, 2] - zb) < 0.3]
-        xt = float(np.median(tsel[:, 0]))
-        for y in (-0.9, 0.9):
-            yt = 0.45 * np.sign(y)
-            ctc = np.array([xt - sx * 0.15, yt, zb])            # 발 아랫면 접점
-            o = np.array([xc, y, zb - 0.9])
-            d = (ctc - o) / np.linalg.norm(ctc - o)
-            h = hit(o, d, 3.0)
-            if h is None: continue
-            b, tm = pipe(o, h + d * EMB, 0.175); add(b, tm, '파베 발 접점')
-            top_needed = max(top_needed, o[2])
-    if top_needed > col_top:                                       # 옆 기둥 연장
-        for y in (-0.9, 0.9):
-            b, tm = pipe([xc, y, col_top], [xc, y, top_needed], 0.7); add(b, tm, '옆 기둥 연장')
+    for zb, yc, xt in sorted(teeth):
+        if round(zb, 2) not in keep: continue
+        ctc = np.array([sx * (xt - 0.2), yc, zb])
+        o = np.array([xc, 0.0, zb - DZ])
+        d = (ctc - o) / np.linalg.norm(ctc - o)
+        b, tm = pipe(o, ctc + d * EMB, 0.175); add(b, tm, '파베 발 접점')
+        top_needed = max(top_needed, o[2])
+    b, tm = pipe([xc, 0.0, PT - 0.3], [xc, 0.0, top_needed], 0.7, flat_start=True); add(b, tm, '옆 기둥')
+    feet.append((xc, 0.0, 0.7))
 
 # 3) 안쪽 트리: 몸통 Ø1.0 + 가지 4 (Ø0.55) + 접점 Ø0.35
 ctr = np.array([0, 0, (lo[2] + hi[2]) / 2 * 0 + 0.0])
