@@ -78,6 +78,39 @@ for sx in (1, -1):
         if h is not None:
             b, tm = pipe(o, h + d * EMB, 0.175); add(b, tm, '옆 윗접점')
 
+# 2-b) 옆 파베 자리: 맨 아래 발(톱니) 3개 아랫면 받침 (양쪽, 알 줄 y=0 피해서 y±0.45)
+N_PAVE = 3
+vv = model.vertices
+for sx in (1, -1):
+    xc = sx * (XO + 0.95)
+    band = vv[(vv[:, 2] > 0.05) & (vv[:, 2] < 9) & (np.abs(vv[:, 1]) < 0.7) & (sx * vv[:, 0] > 0)]
+    if not len(band): continue
+    xmax = np.max(sx * band[:, 0])
+    teeth = band[sx * band[:, 0] > xmax - 0.2]
+    zs = np.sort(teeth[:, 2]); groups = [[zs[0]]]
+    for z in zs[1:]:
+        if z - groups[-1][-1] > 0.25: groups.append([z])
+        else: groups[-1].append(z)
+    groups = [g for g in groups if len(g) > 3][:N_PAVE]
+    print("  파베 발 아랫면 z:", [round(min(g), 2) for g in groups])
+    top_needed = col_top
+    for g in groups:
+        zb = min(g)
+        tsel = teeth[np.abs(teeth[:, 2] - zb) < 0.3]
+        xt = float(np.median(tsel[:, 0]))
+        for y in (-0.9, 0.9):
+            yt = 0.45 * np.sign(y)
+            ctc = np.array([xt - sx * 0.15, yt, zb])            # 발 아랫면 접점
+            o = np.array([xc, y, zb - 0.9])
+            d = (ctc - o) / np.linalg.norm(ctc - o)
+            h = hit(o, d, 3.0)
+            if h is None: continue
+            b, tm = pipe(o, h + d * EMB, 0.175); add(b, tm, '파베 발 접점')
+            top_needed = max(top_needed, o[2])
+    if top_needed > col_top:                                       # 옆 기둥 연장
+        for y in (-0.9, 0.9):
+            b, tm = pipe([xc, y, col_top], [xc, y, top_needed], 0.7); add(b, tm, '옆 기둥 연장')
+
 # 3) 안쪽 트리: 몸통 Ø1.0 + 가지 4 (Ø0.55) + 접점 Ø0.35
 ctr = np.array([0, 0, (lo[2] + hi[2]) / 2 * 0 + 0.0])
 ib = hit(np.array([0, 0, 0.0]), -UP)
