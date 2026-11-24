@@ -1,0 +1,36 @@
+<!doctype html><html><head><style>body{margin:0;background:#fff}</style>
+<script type="importmap">{"imports":{"three":"./three.module.js"}}</script></head><body>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from './jsm/loaders/GLTFLoader.js';
+const P=new URLSearchParams(location.search);
+const base=P.get('b').split('/').map(encodeURIComponent).join('/'), view=P.get('v')||'persp';
+const info=await (await fetch(base+'.json')).json();
+const byName={};info.forEach(i=>byName[i.name]=i);
+const S=800;
+const ren=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});ren.setSize(S,S);ren.setClearColor(0xffffff);document.body.appendChild(ren.domElement);
+const scene=new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff,0x777777,1.5));
+const d1=new THREE.DirectionalLight(0xffffff,1.5);scene.add(d1);
+const d2=new THREE.DirectionalLight(0xffffff,0.6);d2.position.set(-2,1,-1);scene.add(d2);
+const g=await new GLTFLoader().loadAsync(base+'.glb');
+const metal=new THREE.Color(P.get('mc')||'#cfcfcf');
+const box=new THREE.Box3();
+g.scene.traverse(o=>{ if(!o.isMesh) return; const i=byName[o.name]||byName[o.parent?.name];
+  if(!i||!i.vis){o.visible=false;return}
+  const c=i.color?new THREE.Color(`rgb(${i.lc.join(',')})`):metal.clone();
+  o.geometry.computeVertexNormals();
+  o.material=new THREE.MeshStandardMaterial({color:c,metalness:0,roughness:0.45,side:THREE.DoubleSide,flatShading:i.label.includes('stone')||i.label.startsWith('pave')});
+  box.expandByObject(o);
+});
+scene.add(g.scene);
+const ctr=box.getCenter(new THREE.Vector3()), sz=box.getSize(new THREE.Vector3());
+const R=Math.max(sz.x,sz.y,sz.z)*0.6;
+const cam=new THREE.OrthographicCamera(-R,R,R,-R,-1000,1000);cam.up.set(0,0,1);
+const dirs={front:[0,-1,0],side:[1,0,0],top:[0,0,1],persp:[1,-1.6,0.9]};
+const dv=new THREE.Vector3(...dirs[view]).normalize();
+if(view==='top') cam.up.set(0,1,0);
+cam.position.copy(ctr).addScaledVector(dv,100);cam.lookAt(ctr);
+d1.position.copy(dv).multiplyScalar(10).add(new THREE.Vector3(2,0,4));
+ren.render(scene,cam);window.DONE=true;
+</script></body></html>
