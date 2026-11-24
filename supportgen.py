@@ -19,6 +19,8 @@ PLATE_GAP, PLATE_T = 1.7, 0.3
 PIN_D, TIP_D, TIP_L, EMBED = 0.6, 0.35, 0.6, 0.3
 TRUNK_D, FOOT_D, BRANCH_D = 1.0, 1.9, 0.6
 PIN_SPACING = 1.6
+# 회사 가이드라인(261123 다이아반지 캐드 원본) 헤드 규칙
+HEAD_GAP, LEG_D, POST_D, CTIP_D, CTIP_L, H_EMBED = 4.0, 1.0, 0.7, 0.3, 1.6, 0.2
 
 
 def P(v): return r.Point3d(*map(float, v))
@@ -170,6 +172,91 @@ def support_free(o, m, zp=None):
     return len(chosen)
 
 
+def post_tip(o, foot, top, post_d=POST_D):
+    """굵은 기둥 → 끝만 Ø0.3 접점 (길이 1.6), 모델에 0.2 박힘"""
+    foot, top = np.asarray(foot, float), np.asarray(top, float)
+    tip_top = top + np.array([0, 0, H_EMBED])
+    mid = tip_top - np.array([0, 0, CTIP_L])
+    o.cyl(foot, mid, post_d)
+    o.cone(mid, tip_top, CTIP_D * 1.6, CTIP_D)
+
+
+def ring_plate(o, c, r_out, r_in, z, bars):
+    """부품 모양 따라 링형 바닥판 (+ 가운데 기둥용 가로대)"""
+    n = 48
+    for k in range(n):
+        a0, a1 = 2 * math.pi * k / n, 2 * math.pi * (k + 1) / n
+        rm = (r_out + r_in) / 2
+        p0 = np.array([c[0] + rm * math.cos(a0), c[1] + rm * math.sin(a0), z - PLATE_T / 2])
+        p1 = np.array([c[0] + rm * math.cos(a1), c[1] + rm * math.sin(a1), z - PLATE_T / 2])
+    # 링판: 사각 단면을 Z축 회전
+    pts = [P((c[0] + r_in, c[1], z - PLATE_T)), P((c[0] + r_out, c[1], z - PLATE_T)),
+           P((c[0] + r_out, c[1], z)), P((c[0] + r_in, c[1], z)), P((c[0] + r_in, c[1], z - PLATE_T))]
+    crv = r.PolylineCurve(pts)
+    rev = r.RevSurface.Create(crv, r.Line(P((c[0], c[1], 0)), P((c[0], c[1], 1))), 0, 2 * math.pi)
+    a = r.ObjectAttributes(); a.LayerIndex = o.layer
+    o.f.Objects.Add(r.Brep.CreateFromRevSurface(rev, False, False), a); o.n += 1
+    ann = trimesh.creation.annulus(r_min=r_in, r_max=r_out, height=PLATE_T, sections=48)
+    ann.apply_translation((c[0], c[1], z - PLATE_T / 2)); o.prev.append(ann)
+    for (x0, y0, x1, y1) in bars:
+        w = 0.6
+        o.box([min(x0, x1) - w, min(y0, y1) - w, z - PLATE_T], [max(x0, x1) + w, max(y0, y1) + w, z])
+
+
+def support_head(o, m, members):
+    """헤드/부품 — 회사 규칙: 다리 Ø1.0 / 테두리 Ø0.7+접점 / 처진 곳 최소 / 링형 바닥판 4mm 아래"""
+    lo, hi = m.bounds
+    zmin = lo[2]; zp = zmin - HEAD_GAP
+    c = (lo + hi) / 2
+    contacts = []   # (xy, top, kind)
+    # 1) 다리: 바닥에 닿아 있고 세로로 긴 조각
+    legs = []
+    for t in members:
+        a, b = t.bounds; e = b - a
+        if abs(a[2] - zmin) < 0.05 and e[2] > 2.0 and max(e[0], e[1]) < 2.6:
+            bot = t.vertices[t.vertices[:, 2] < a[2] + 0.03]      # 다리 바닥면 중심
+            legs.append(bot.mean(0)[:2])
+    for xy in legs:
+        o.cyl([xy[0], xy[1], zp], [xy[0], xy[1], zmin + H_EMBED], LEG_D); contacts.append(np.array(xy))
+    # 2) 다리 사이 테두리 (중간 지점)
+    if len(legs) >= 3:
+        ang = sorted([(math.atan2(y - c[1], x - c[0]), math.hypot(x - c[0], y - c[1])) for x, y in legs])
+        for k in range(len(ang)):
+            a0, r0 = ang[k]; a1, r1 = ang[(k + 1) % len(ang)]
+            if k == len(ang) - 1: a1 += 2 * math.pi
+            am, rm = (a0 + a1) / 2, (r0 + r1) / 2
+            for dr in (0, -0.3, -0.6, 0.3, -0.9):
+                x, y = c[0] + (rm + dr) * math.cos(am), c[1] + (rm + dr) * math.sin(am)
+                hit, nrm = first_hit_up(m, x, y, zp - 1)
+                if hit is not None and nrm[2] < -0.5 and hit[2] < zmin + 0.3:
+                    post_tip(o, [x, y, zp], hit); contacts.append(hit[:2]); break
+    # 3) 그 외 처진 면 (구멍 너머 위쪽 판 등) — 최소 개수, 간격 2.0
+    cand = []
+    for x in np.arange(lo[0] + 0.3, hi[0], 0.3):
+        for y in np.arange(lo[1] + 0.3, hi[1], 0.3):
+            hit, nrm = first_hit_up(m, x, y, zp - 1)
+            if hit is None or nrm[2] > -0.6: continue
+            if hit[2] < zmin + 0.3: continue           # 바닥면은 1),2)로 처리
+            cand.append(hit)
+    cand.sort(key=lambda p: (round(p[2], 1), math.hypot(p[0] - c[0], p[1] - c[1])))   # 낮고 가운데부터
+    extra, ex = 0, []
+    for p in cand:
+        if all(np.linalg.norm(p[:2] - q) >= 1.2 for q in contacts) and all(np.linalg.norm(p[:2] - q) >= 2.0 for q in ex) and extra < 4:
+            post_tip(o, [p[0], p[1], zp], p); ex.append(p[:2]); extra += 1
+    contacts += ex
+    # 바닥판: 부품 바깥 윤곽 따라 링형 + 가운데 기둥용 가로대
+    R = 0.5 * max(hi[0] - lo[0], hi[1] - lo[1])
+    r_out, r_in = R + 0.4, max(R - 1.6, 0.5)
+    bars = []
+    for q in contacts:
+        d = math.hypot(q[0] - c[0], q[1] - c[1])
+        if d < r_in - 0.3:
+            ang = math.atan2(q[1] - c[1], q[0] - c[0]) if d > 0.05 else 0
+            bars.append((q[0], q[1], c[0] + r_in * math.cos(ang), c[1] + r_in * math.sin(ang)))
+    ring_plate(o, c, r_out, r_in, zp, bars)
+    return len(contacts)
+
+
 def cluster(objs):
     """bbox 겹침으로 부품 묶기"""
     groups = []
@@ -179,7 +266,7 @@ def cluster(objs):
         for g in hit:
             new += g; groups.remove(g)
         groups.append(new)
-    return [trimesh.util.concatenate([t for t, _ in g]) for g in groups]
+    return [(trimesh.util.concatenate([t for t, _ in g]), [t for t, _ in g]) for g in groups]
 
 
 def main():
@@ -197,13 +284,13 @@ def main():
     parts = cluster(objs)
     o = Out(f, Sidx)
     report = []
-    for m in parts:
+    for m, members in parts:
         lo, hi = m.bounds; c = (lo + hi) / 2
         is_ring = abs(c[0]) < 2 and abs(c[2]) < 3 and (hi[0] - lo[0]) > 14
         if is_ring:
             support_ring(o, m); report.append(("링", o.n))
         else:
-            n = support_free(o, m); report.append(("부품", n))
+            n = support_head(o, m, members); report.append(("헤드/부품", n))
     f.Write(dst, 7)
     print("출력:", dst)
     for k, v in report: print(" ", k, v)
@@ -211,7 +298,7 @@ def main():
     # 미리보기용 glb/json (render.js 형식)
     base = os.path.splitext(dst)[0]
     scene = trimesh.Scene(); info = []
-    for k, m in enumerate(parts):
+    for k, (m, _) in enumerate(parts):
         scene.add_geometry(m, node_name=f"p{k}", geom_name=f"p{k}")
         info.append(dict(name=f"p{k}", label="part", layer="기본값", vis=True, lc=[201, 201, 201], color=False))
     for k, m in enumerate(o.prev):
