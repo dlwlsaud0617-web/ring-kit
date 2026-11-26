@@ -16,6 +16,7 @@ pip install rhino3dm trimesh manifold3d numpy
 - ★ 서포트 요청 → `python3 support_v3.py 입력.3dm 출력.3dm` (회사 정답 방식, STYLE_GUIDE C-3)
 - 볼(구슬) 반지 눕힘 → `python3 support_ballring.py 입력.3dm 출력.3dm --label 호수` (STYLE_GUIDE C-4)
 - 펜던트 헤드(목걸이) → `python3 support_pendant.py 입력.3dm 출력.3dm` (STYLE_GUIDE C-5)
+- 펜던트 알 크기 변형(기출 변형) → `python3 pendant_resize.py 원본.3dm 출력.3dm --stone 5.6` (Scale + 고리 이동 + 표시 교체 + 서포트 자동)
 - (이전) `python3 support_v2.py 입력.3dm 출력.3dm` (최신 규칙: 바닥판 4mm·바닥기둥·옆기둥+가장자리 접점·트리·헤드기둥·둥근 끝·차수3 없음)
 - (구버전) `python3 supportgen.py 입력.3dm 출력.3dm` (회사 방식: 바닥판+바깥기둥+안쪽 트리, 부품은 오버행 기둥) → `node render.js <출력경로(확장자 없이)>` 로 미리보기
 - 사용자가 올린 .3dm 분석 → 렌더(정면/측면/윗면/투시) + 핵심 치수 + 제작 방법 키워드 요약

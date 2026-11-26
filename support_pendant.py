@@ -26,7 +26,10 @@ POST_R, HOOK_R, GAP, PT_T = 0.36, 0.18, 2.75, 0.3
 HOOK0 = [(2.183, 1.562), (2.315, 1.484), (2.561, 1.287), (2.837, 0.899), (2.994, 0.45), (3.012, 0.135), (3.0, -0.017)]
 
 
-def main(src, dst):
+def main(src, dst, mesh_override=None):
+    mo = mesh_override or {}
+    def M(o):
+        return mo[str(o.Attributes.Id)] if str(o.Attributes.Id) in mo else mesh_of(o.Geometry)
     f = r.File3dm.Read(src)
     names = {i: l.FullPath for i, l in enumerate(f.Layers)}
     sup = {i for i, n in names.items() if n.lower() == 's'}
@@ -40,9 +43,9 @@ def main(src, dst):
     parts = []
     for o in f.Objects:
         if not isinstance(o.Geometry, r.Brep) or o.Attributes.LayerIndex in skip | {S}: continue
-        parts.append(mesh_of(o.Geometry))
+        parts.append(M(o))
     if stone:
-        sb = mesh_of(stone[0].Geometry).bounds; cx, cy = (sb[0][:2] + sb[1][:2]) / 2; stone_top = sb[1][2]
+        sb = M(stone[0]).bounds; cx, cy = (sb[0][:2] + sb[1][:2]) / 2; stone_top = sb[1][2]
     else:
         allb = trimesh.util.concatenate(parts).bounds; cx, cy = (allb[0][:2] + allb[1][:2]) / 2; stone_top = 1e9
     parts = [m for m in parts if m.bounds[0][2] < stone_top - 0.5]      # 알 위 표시 글자 제외
