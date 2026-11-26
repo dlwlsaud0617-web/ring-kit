@@ -7,8 +7,9 @@ support_pendant.py — 펜던트 헤드(목걸이 4발 등) 서포트 (회사 26
   2. 아래 링  : 안쪽 기둥 Ø0.72 (링 관 중심보다 0.15 안쪽), 링 밑면에 0.4 박힘
   3. 위 레일  : 바깥 기둥 Ø0.72 (레일 바깥 + 0.48) 이 아래 링 높이까지 올라오고
                → 갈고리 곡선 Ø0.36 이 안쪽 위로 휘어 레일 밑면(관 중심 +0.08)에 닿음
-  4. 목걸이 고리: 고리 바로 아래 기둥 Ø0.72, 고리에 0.36 박힘
-  5. 바닥판   : 원(가장 바깥 기둥 + 0.66) + 고리 기둥용 귀, 두께 0.3, 모델 최저점 2.75 아래
+  4. 목걸이 고리(오링): 굵은 기둥 Ø0.72 → 위에 얇은 파이프 Ø0.36 (1.0mm) 로 받침  [사용자 지정]
+  5. 바닥판   : 제품 윤곽을 일정 간격으로 따라감 (모든 기둥 + 0.3 여유) [사용자 지정]
+               (원본 방식 = 원 + 고리 귀 : PLATE_MODE='ring')
   6. 기둥 = 곧게(차수1), 위 끝 둥글게 / 갈고리 = 곡선(차수3), 양끝 둥글게
 사용: python3 support_pendant.py 입력.3dm 출력.3dm
 """
@@ -22,6 +23,8 @@ from pipe_rules import pipe, max_degree
 from support_v3 import curved_pipe, mesh_of
 
 POST_R, HOOK_R, GAP, PT_T = 0.36, 0.18, 2.75, 0.3
+LOOP_TIP, LOOP_TIP_LEN = True, 1.0          # 오링: 굵은 기둥 + 얇은 파이프(1.0mm)
+PLATE_MODE, PLATE_MARGIN = 'outline', 0.3   # 바닥판: 제품 윤곽 일정 간격 ('ring' = 원+귀)
 # 기준 갈고리 (원본) : 접점 C0 → 기둥 끝 E0, 반지름방향 r / 높이 z
 HOOK0 = [(2.183, 1.562), (2.315, 1.484), (2.561, 1.287), (2.837, 0.899), (2.994, 0.45), (3.012, 0.135), (3.0, -0.017)]
 
@@ -104,10 +107,38 @@ def main(src, dst, mesh_override=None):
     for m in loops:      # 목걸이 고리
         a, b_ = m.bounds
         lowv = m.vertices[m.vertices[:, 2] < a[2] + 0.08]; x, y = lowv[:, 0].mean(), lowv[:, 1].mean()   # 고리 맨 아래점
-        b, tm = pipe([x, y, PT - 0.2], [x, y, a[2] + 0.36 - POST_R + POST_R], POST_R, flat_start=True); add(b, tm, '고리 기둥 Ø0.72')
+        if LOOP_TIP:   # 굵은 기둥 → 위에 얇은 파이프로 오링 받침
+            zt = a[2] - LOOP_TIP_LEN
+            b, tm = pipe([x, y, PT - 0.2], [x, y, zt], POST_R, flat_start=True); add(b, tm, '오링 기둥 Ø0.72')
+            b, tm = pipe([x, y, zt], [x, y, a[2] + 0.2 - HOOK_R], HOOK_R); add(b, tm, '오링 얇은 파이프 Ø0.36')
+        else:
+            b, tm = pipe([x, y, PT - 0.2], [x, y, a[2]], POST_R, flat_start=True); add(b, tm, '고리 기둥 Ø0.72')
         feet.append((x, y))
-    # 바닥판: 원 + 귀
+    # 바닥판
     nloop = len(loops)
+    if PLATE_MODE == 'outline':   # 제품 윤곽(위에서 본 모양)을 일정한 간격으로 따라감
+        from shapely.geometry import Polygon
+        tris = model.vertices[model.faces][:, :, :2]
+        sil = unary_union([Polygon(t).buffer(0.001) for t in tris if Polygon(t).area > 1e-6])
+        sil = max(sil.geoms, key=lambda g: g.area) if sil.geom_type == 'MultiPolygon' else sil
+        sil = Polygon(sil.exterior)
+        need = max([sil.exterior.distance(Point(x, y)) if not sil.contains(Point(x, y)) else 0 for x, y in feet] + [0])
+        off = need + POST_R + PLATE_MARGIN
+        poly = sil.buffer(off, 32).simplify(0.02)
+        print(f'  바닥판: 제품 윤곽 + {off:.2f}mm 일정 간격')
+    else:
+        poly = None
+    if poly is None:
+        pass
+    else:
+        crv = r.PolylineCurve([r.Point3d(x, y, PT - PT_T) for x, y in poly.exterior.coords])
+        ext = r.Extrusion.Create(crv, PT_T, True)
+        eb = ext.GetBoundingBox()
+        if abs(eb.Max.Z - PT) > 1e-3: ext.Translate(r.Vector3d(0, 0, PT - eb.Max.Z))
+        a_ = r.ObjectAttributes(); a_.LayerIndex = S; f.Objects.Add(ext, a_); log.append('바닥판')
+        pl = trimesh.creation.extrude_polygon(poly, PT_T); pl.apply_translation((0, 0, PT - PT_T)); prev.append(pl)
+        return finish(f, dst, S, prongs, rings, loops, mids, log, model, prev)
+    # (원 + 귀 방식)
     rmax = max(math.hypot(x - cx, y - cy) for x, y in feet[:len(feet) - nloop])
     shp = [Point(cx, cy).buffer(rmax + POST_R + 0.3, 64)]
     for (lx, ly) in feet[len(feet) - nloop:]:
@@ -122,6 +153,10 @@ def main(src, dst, mesh_override=None):
     if abs(eb.Max.Z - PT) > 1e-3: ext.Translate(r.Vector3d(0, 0, PT - eb.Max.Z))
     a_ = r.ObjectAttributes(); a_.LayerIndex = S; f.Objects.Add(ext, a_); log.append('바닥판')
     pl = trimesh.creation.extrude_polygon(poly, PT_T); pl.apply_translation((0, 0, PT - PT_T)); prev.append(pl)
+    return finish(f, dst, S, prongs, rings, loops, mids, log, model, prev)
+
+
+def finish(f, dst, S, prongs, rings, loops, mids, log, model, prev):
     f.Write(dst, 7)
     print(f'발 {len(prongs)}개, 링 {len(rings)}개, 고리 {len(loops)}개, 서포트 방향(도): {[round(math.degrees(a)) for a in mids]}')
     print(Counter(log))
