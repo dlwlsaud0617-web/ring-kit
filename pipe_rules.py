@@ -19,8 +19,9 @@ def _P(v):
     return r.Point3d(*map(float, v))
 
 
-def pipe(p0, p1, rad, flat_start=False, flat_end=False):
-    """p0→p1 원형 파이프. 반환: (Brep, 미리보기 trimesh)"""
+def pipe(p0, p1, rad, flat_start=False, flat_end=False, rad_end=None):
+    """p0→p1 원형 파이프 (rad_end 주면 끝 지름이 다른 테이퍼). 반환: (Brep, 미리보기 trimesh)"""
+    r0 = rad; r1 = rad if rad_end is None else rad_end
     p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
     ax = p1 - p0
     L = float(np.linalg.norm(ax))
@@ -30,30 +31,38 @@ def pipe(p0, p1, rad, flat_start=False, flat_end=False):
     # (축방향 거리 t, 반지름방향 d, weight)
     pts = []
     if flat_start:
-        pts += [(0, 0, 1), (0, rad / 2, 1), (0, rad, 1)]
+        pts += [(0, 0, 1), (0, r0 / 2, 1), (0, r0, 1)]
     else:
-        pts += [(-rad, 0, 1), (-rad, rad, W), (0, rad, 1)]
-    pts += [(L / 2, rad, 1)]
+        pts += [(-r0, 0, 1), (-r0, r0, W), (0, r0, 1)]
+    pts += [(L / 2, (r0 + r1) / 2, 1)]
     if flat_end:
-        pts += [(L, rad, 1), (L, rad / 2, 1), (L, 0, 1)]
+        pts += [(L, r1, 1), (L, r1 / 2, 1), (L, 0, 1)]
     else:
-        pts += [(L, rad, 1), (L + rad, rad, W), (L + rad, 0, 1)]
+        pts += [(L, r1, 1), (L + r1, r1, W), (L + r1, 0, 1)]
     crv = r.NurbsCurve(3, True, 3, 7)  # dim, rational, order(=degree2), count
     for i, (t, d, w) in enumerate(pts):
         q = p0 + u * t + s * d
         crv.Points[i] = r.Point4d(q[0] * w, q[1] * w, q[2] * w, w)
     for i, k in enumerate([0, 0, 1, 1, 2, 2, 3, 3]):
         crv.Knots[i] = k
-    a0 = p0 - u * (0 if flat_start else rad)
-    a1 = p1 + u * (0 if flat_end else rad)
+    a0 = p0 - u * (0 if flat_start else r0)
+    a1 = p1 + u * (0 if flat_end else r1)
     rev = r.RevSurface.Create(crv, r.Line(_P(a0), _P(a1)), 0, 2 * math.pi)
     brep = r.Brep.CreateFromRevSurface(rev, False, False)
     # 미리보기: 원기둥 + 반구
-    parts = [trimesh.creation.cylinder(radius=rad, segment=[p0, p1], sections=20)]
+    if r0 == r1:
+        parts = [trimesh.creation.cylinder(radius=r0, segment=[p0, p1], sections=20)]
+    else:
+        n = 20; v2 = np.cross(u, s); ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        ring = lambda c, rr: [c + rr * (math.cos(t) * s + math.sin(t) * v2) for t in ang]
+        V = ring(p0, r0) + ring(p1, r1) + [p0, p1]; F = []
+        for k in range(n):
+            k2 = (k + 1) % n; F += [[k, k2, n + k2], [k, n + k2, n + k], [2 * n, k2, k], [2 * n + 1, n + k, n + k2]]
+        parts = [trimesh.Trimesh(np.array(V), np.array(F))]
     if not flat_start:
-        sp = trimesh.creation.icosphere(subdivisions=2, radius=rad); sp.apply_translation(p0); parts.append(sp)
+        sp = trimesh.creation.icosphere(subdivisions=2, radius=r0); sp.apply_translation(p0); parts.append(sp)
     if not flat_end:
-        sp = trimesh.creation.icosphere(subdivisions=2, radius=rad); sp.apply_translation(p1); parts.append(sp)
+        sp = trimesh.creation.icosphere(subdivisions=2, radius=r1); sp.apply_translation(p1); parts.append(sp)
     return brep, trimesh.util.concatenate(parts)
 
 

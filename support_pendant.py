@@ -22,9 +22,10 @@ sys.path.insert(0, '/home/user/ring-kit')
 from pipe_rules import pipe, max_degree
 from support_v3 import curved_pipe, mesh_of
 
-POST_R, HOOK_R, GAP, PT_T = 0.36, 0.18, 2.75, 0.3
+POST_R, HOOK_R, GAP, PT_T = 0.35, 0.15, 2.75, 0.3
+POST_TOP_R = 0.25                           # 기둥: 아래 Ø0.7 → 위 Ø0.5 (사용자 지정)
 LOOP_TIP, LOOP_TIP_LEN = True, 1.0          # 오링: 굵은 기둥 + 얇은 파이프(1.0mm)
-PLATE_MODE, PLATE_MARGIN = 'outline', 0.3   # 바닥판: 제품 윤곽 일정 간격 ('ring' = 원+귀)
+PLATE_MODE, PLATE_MARGIN = 'circle', 0.3    # 바닥판: 'circle' 중심 맞춘 원 / 'outline' 제품 윤곽 / 'ring' 원+귀
 # 기준 갈고리 (원본) : 접점 C0 → 기둥 끝 E0, 반지름방향 r / 높이 z
 HOOK0 = [(2.183, 1.562), (2.315, 1.484), (2.561, 1.287), (2.837, 0.899), (2.994, 0.45), (3.012, 0.135), (3.0, -0.017)]
 
@@ -85,7 +86,7 @@ def main(src, dst, mesh_override=None):
         x, y = cx + r_in_post * math.cos(a), cy + r_in_post * math.sin(a)
         h = hit(x, y)
         if h is None: continue
-        b, tm = pipe([x, y, PT - 0.2], [x, y, h[2] + 0.4 - POST_R], POST_R, flat_start=True); add(b, tm, '아래 링 기둥 Ø0.72')
+        b, tm = pipe([x, y, PT - 0.2], [x, y, h[2] + 0.4 - POST_R], POST_R, flat_start=True, rad_end=POST_TOP_R); add(b, tm, '아래 링 기둥 Ø0.7→0.5')
         feet.append((x, y))
     if len(rings) > 1:   # 위 레일: 바깥 기둥 + 갈고리
         up = rings[1]; ru = rad_of(up)
@@ -97,26 +98,30 @@ def main(src, dst, mesh_override=None):
         for a in mids:
             ca, sa = math.cos(a), math.sin(a)
             x, y = cx + r_out * ca, cy + r_out * sa
-            b, tm = pipe([x, y, PT - 0.2], [x, y, E[1]], POST_R, flat_start=True); add(b, tm, '레일 바깥 기둥 Ø0.72')
+            b, tm = pipe([x, y, PT - 0.2], [x, y, E[1]], POST_R, flat_start=True, rad_end=POST_TOP_R); add(b, tm, '레일 바깥 기둥 Ø0.7→0.5')
             feet.append((x, y))
             ctrl = []
             for rr_, zz in HOOK0:
                 rn = C[0] + (rr_ - C0[0]) * sr; zn = E[1] + (zz - E0[1]) * sz
                 ctrl.append([cx + rn * ca, cy + rn * sa, zn])
-            b, tm = curved_pipe(ctrl, HOOK_R); add(b, tm, '갈고리 Ø0.36')
+            b, tm = curved_pipe(ctrl, HOOK_R); add(b, tm, '갈고리 Ø0.3')
     for m in loops:      # 목걸이 고리
         a, b_ = m.bounds
         lowv = m.vertices[m.vertices[:, 2] < a[2] + 0.08]; x, y = lowv[:, 0].mean(), lowv[:, 1].mean()   # 고리 맨 아래점
         if LOOP_TIP:   # 굵은 기둥 → 위에 얇은 파이프로 오링 받침
             zt = a[2] - LOOP_TIP_LEN
-            b, tm = pipe([x, y, PT - 0.2], [x, y, zt], POST_R, flat_start=True); add(b, tm, '오링 기둥 Ø0.72')
-            b, tm = pipe([x, y, zt], [x, y, a[2] + 0.2 - HOOK_R], HOOK_R); add(b, tm, '오링 얇은 파이프 Ø0.36')
+            b, tm = pipe([x, y, PT - 0.2], [x, y, zt], POST_R, flat_start=True, rad_end=POST_TOP_R); add(b, tm, '오링 기둥 Ø0.7→0.5')
+            b, tm = pipe([x, y, zt], [x, y, a[2] + 0.2 - HOOK_R], HOOK_R); add(b, tm, '오링 얇은 파이프 Ø0.3')
         else:
-            b, tm = pipe([x, y, PT - 0.2], [x, y, a[2]], POST_R, flat_start=True); add(b, tm, '고리 기둥 Ø0.72')
+            b, tm = pipe([x, y, PT - 0.2], [x, y, a[2]], POST_R, flat_start=True, rad_end=POST_TOP_R); add(b, tm, '고리 기둥 Ø0.7→0.5')
         feet.append((x, y))
     # 바닥판
     nloop = len(loops)
-    if PLATE_MODE == 'outline':   # 제품 윤곽(위에서 본 모양)을 일정한 간격으로 따라감
+    if PLATE_MODE == 'circle':    # 제품 중심에 맞춘 원
+        Rp = max(math.hypot(x - cx, y - cy) for x, y in feet) + POST_R + PLATE_MARGIN
+        poly = Point(cx, cy).buffer(Rp, 64)
+        print(f'  바닥판: 원 Ø{2*Rp:.2f}, 중심 ({cx:.2f},{cy:.2f})')
+    elif PLATE_MODE == 'outline':   # 제품 윤곽(위에서 본 모양)을 일정한 간격으로 따라감
         from shapely.geometry import Polygon
         tris = model.vertices[model.faces][:, :, :2]
         sil = unary_union([Polygon(t).buffer(0.001) for t in tris if Polygon(t).area > 1e-6])
